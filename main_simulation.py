@@ -7,7 +7,7 @@ from ultralytics import YOLO
 general_model = YOLO("yolov8n.pt")
 pothole_model = YOLO("best.pt")
 
-cap = cv2.VideoCapture("testv2.mp4")
+cap = cv2.VideoCapture("testv1.mp4")
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -24,6 +24,9 @@ while cap.isOpened():
     # -------- LANE + ROI --------
     edges, roi_edges = detect_lanes(frame)
     roi_mask = region_of_interest(edges)
+
+    # -------- BLUE REGION (NEAR CAR) --------
+    BLUE_Y = int(height * 0.55)
 
     # -------- EDGE DETECTION BANDS --------
     INNER_EDGE_Y = int(height * 0.40)
@@ -47,22 +50,33 @@ while cap.isOpened():
         cx = (x1 + x2) // 2
         cy = (y1 + y2) // 2
 
-        # ✅ STRICT ROI FILTER (RESTORED)
+        # ✅ STRICT ROI FILTER
         if roi_mask[cy, cx] != 255:
             continue
 
         if label in allowed_classes:
 
-            # 🔴 INNER EDGE → STOP
-            if INNER_EDGE_Y - EDGE_THICKNESS <= cy <= INNER_EDGE_Y + EDGE_THICKNESS:
+            # 🧍 HUMAN SAFETY PRIORITY
+            if label == "person":
                 decision = "STOP"
                 delay = 0
 
-            # 🟡 OUTER EDGE → SLOW
-            elif OUTER_EDGE_Y - EDGE_THICKNESS <= cy <= OUTER_EDGE_Y + EDGE_THICKNESS:
-                if decision != "STOP":
-                    decision = "SLOW"
-                    delay = 100
+            else:
+                # 🔵 BLUE REGION → IMMEDIATE STOP
+                if cy >= BLUE_Y:
+                    decision = "STOP"
+                    delay = 0
+
+                # 🔴 INNER EDGE → STOP
+                elif INNER_EDGE_Y - EDGE_THICKNESS <= cy <= INNER_EDGE_Y + EDGE_THICKNESS:
+                    decision = "STOP"
+                    delay = 0
+
+                # 🟡 OUTER EDGE → SLOW
+                elif OUTER_EDGE_Y - EDGE_THICKNESS <= cy <= OUTER_EDGE_Y + EDGE_THICKNESS:
+                    if decision != "STOP":
+                        decision = "SLOW"
+                        delay = 100
 
             # Draw detection
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,0), 2)
@@ -85,19 +99,33 @@ while cap.isOpened():
             cv2.putText(frame, "POTHOLE", (x1, y1-10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 2)
 
-    # -------- DRAW OUTER TRAPEZIUM --------
+    # -------- DRAW TRAPEZIUM (ALIGNED WITH RED LINE) --------
+    BOTTOM_Y = int(height * 0.65)
+
+    # Move trapezium top slightly ABOVE red debug line
+    TOP_Y = OUTER_EDGE_Y - 20  # tweak: 10–30 for fine control
+    OUTER_EDGE_Y = TOP_Y
     big_polygon = np.array([[
-        (0, int(height * 0.65)),
-        (width, int(height * 0.65)),
-        (int(width * 0.60), int(height * 0.35)),
-        (int(width * 0.40), int(height * 0.35))
+        (0, BOTTOM_Y),
+        (width, BOTTOM_Y),
+        (int(width * 0.65), TOP_Y),
+        (int(width * 0.35), TOP_Y)
     ]], np.int32)
 
     cv2.polylines(frame, big_polygon, isClosed=True, color=(0, 0, 255), thickness=2)
+    red_trap = np.array([
+        (0, BOTTOM_Y),
+        (width, BOTTOM_Y),
+        (int(width * 0.65), TOP_Y),
+        (int(width * 0.35), TOP_Y)
+    ], np.int32)
 
-    # -------- KEEP DEBUG LINES (OPTIONAL) --------
+    # -------- DEBUG LINES --------
     cv2.line(frame, (0, INNER_EDGE_Y), (width, INNER_EDGE_Y), (0,255,0), 2)
-    cv2.line(frame, (0, OUTER_EDGE_Y), (width, OUTER_EDGE_Y), (0,0,255), 2)
+    cv2.line(frame, (0,OUTER_EDGE_Y), (width, OUTER_EDGE_Y), (0,0,255), 2)
+
+    # 🔵 BLUE REGION VISUAL
+    cv2.line(frame, (0, BLUE_Y), (width, BLUE_Y), (255, 0, 0), 2)
 
     # -------- THERMAL VIEW --------
     thermal = cv2.applyColorMap(edges, cv2.COLORMAP_JET)
@@ -112,7 +140,7 @@ while cap.isOpened():
     cv2.putText(frame, f"Decision: {decision}", (30, 50),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
-    # ✅ RESTORED ALL WINDOWS
+    # -------- DISPLAY WINDOWS --------
     cv2.imshow("Final Output", frame)
     cv2.imshow("Edges", edges)
     cv2.imshow("ROI", roi_mask)
